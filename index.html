@@ -192,8 +192,7 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
           <div class="field"><label for="f-boards" id="f-boards-label">Boards</label><input type="number" id="f-boards" min="0" step="1" inputmode="numeric" placeholder="e.g. 60" autocomplete="off" aria-describedby="qty-hint"></div>
         </div>
         <span class="hint" id="qty-hint" role="status" hidden></span></div>
-      <div class="out"><div class="v" id="e-lm">–</div><div class="k" id="e-k">linear metres needed</div></div>
-      <div class="out"><div class="v" id="e-cost">–</div><div class="k">cladding boards</div></div>
+      <div class="out"><div class="v" id="e-cost">–</div></div>
       <div class="note">Boards only, net area with no cutting allowance. Battens, fixings, setup fees and delivery are quoted separately.</div>
     </div>
     <div class="extras" role="group" aria-labelledby="extras-title">
@@ -589,14 +588,6 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   function qtyText(it) { return it.unit === "n" ? boards(it.area) : it.area + (it.unit === "lm" ? " lm" : " m²"); }
   // What is shown beside a quantity box: the linear metres (for boards, how they were reached), what they cover
   // when the quantity was not an area, and whether a board length is still needed.
-  function qtyShown(it, f) {
-    var lm = f ? itemLm(it, f.cov) : 0;
-    if (!(lm > 0)) return { lm: 0, text: "–", k: "linear metres needed" };
-    var text = lm.toFixed(1) + " lm";
-    if (it.unit === "n") text = num(it.area) + " × " + lengthText(lineLength(it)) + " = " + text;
-    return { lm: lm, text: text,
-      k: it.unit === "m2" ? "linear metres needed" : "linear metres, covering " + (lm * f.cov / 1000).toFixed(1) + " m²" };
-  }
   // The quantity line of the email; cov is the line's coverage when it is on the price list, else 0.
   function qtyLine(it, cov) {
     if (it.unit === "m2") return it.area > 0 ? "Area: " + it.area + " m2" + (cov ? " (about " + (it.area * 1000 / cov).toFixed(0) + " lm)" : "") : "Area: ";
@@ -884,19 +875,15 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   $("copy-addr").addEventListener("click", function () { copyText(EMAIL, "Address copied: " + EMAIL); });
 
   function renderEstimate() {
-    var row = priceRow(), it = row ? currentItem() : null, unit = qUnit;
-    var q = it ? qtyShown(it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) }) : { lm: 0, text: "–", k: "linear metres needed" };
-    if (it) fillBoxes(cardBoxes(), it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) });
-    $("e-lm").textContent = q.text; $("e-k").textContent = q.k;
-    var note = it ? boardsNote(it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) }, false) : "";
+    // Under the three boxes: the price and its VAT tag only (Beren 20/11/26). The metres and the boards are in the boxes.
+    var row = priceRow(), it = row ? currentItem() : null, f = it ? { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) } : null;
+    var lm = it ? itemLm(it, f.cov) : 0, len = lm > 0 && qUnit !== "n" ? chosenLength() : null;
+    if (it) fillBoxes(cardBoxes(), it, f);
+    var note = it ? boardsNote(it, f, false) : "";
+    if (len && Math.ceil(lm / len[0]) > len[1]) note = "That is more " + len[0].toFixed(1) + " m boards than we have in stock.";
     $("qty-hint").hidden = !note; $("qty-hint").textContent = note;
-    if (!(q.lm > 0)) { $("e-cost").textContent = "–"; return; }
-    var len = chosenLength();
-    if (len && unit !== "n") {
-      var count = Math.ceil(q.lm / len[0]);
-      $("e-lm").textContent += " (" + num(count) + " × " + len[0].toFixed(1) + " m" + (count > len[1] ? ", more than in stock" : "") + ")";
-    }
-    $("e-cost").innerHTML = money(q.lm * row[6]);
+    if (!(lm > 0)) { $("e-cost").textContent = "–"; return; }
+    $("e-cost").innerHTML = money(lm * row[6]);
   }
   $("f-length").addEventListener("change", function () { touched(); selLen = $("f-length").value; render(); });
 
@@ -1046,9 +1033,9 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
       boxes.what = d.what;
       if (it.area > 0) boxes[it.unit].value = it.area;
       field.appendChild(grid); field.appendChild(hint);
-      function out(k) { var o = el("div", "out"), v = el("div", "v", "–"), kk = el("div", "k", k); o.appendChild(v); o.appendChild(kk); row.appendChild(o); v.k = kk; return v; }
       row.appendChild(field);
-      var lmOut = out("linear metres needed"), costOut = out("cladding boards");
+      var costBox = el("div", "out"), costOut = el("div", "v", "–");
+      costBox.appendChild(costOut); row.appendChild(costBox);
       var rm = el("button", "btn", "Remove"); rm.type = "button";
       rm.setAttribute("aria-label", "Remove " + d.what + " from your quote list");
       row.appendChild(rm);
@@ -1059,13 +1046,12 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
         }
         per.innerHTML = "<b>" + money(f.priceLm) + "</b> per linear metre · <b>" + money(perM2(f.priceLm, f.cov)) +
           "</b> per square metre · covers " + f.cov + " mm per board (" + f.note + ")";
-        var q = qtyShown(it, f);
+        var lm = itemLm(it, f.cov);
         fillBoxes(boxes, it, f);
-        lmOut.textContent = q.text; lmOut.k.textContent = q.k;
         var note = boardsNote(it, f, true);
         hint.hidden = !note; hint.textContent = note;
-        if (!(q.lm > 0)) { costOut.textContent = "–"; return; }
-        costOut.innerHTML = penceText(lineFromLm(f.priceLm, q.lm, incVat ? VAT : 0).pence) + vatTag();
+        if (!(lm > 0)) { costOut.textContent = "–"; return; }
+        costOut.innerHTML = penceText(lineFromLm(f.priceLm, lm, incVat ? VAT : 0).pence) + vatTag();
       }
       rm.addEventListener("click", function (e) {
         // The second click of a double click lands on the row that moved up: it must not take that row too.
