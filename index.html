@@ -83,11 +83,11 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 3px s
 .est .out .v, .qrow .out .v { font-family: var(--mono); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .est .out .k, .qrow .out .k { font-size: .78rem; color: var(--muted); }
 .est .note { grid-column: 1 / -1; font-size: .82rem; color: var(--muted); }
-/* Quantity: the figure and what it is in (m², linear metres, boards) side by side, on a row of their own */
-.est .field, .qrow .field { grid-column: 1 / -1; max-width: 420px; }
-.qty { display: flex; gap: 8px; min-width: 0; }
-.qty input { flex: 1 1 0; min-width: 0; }
-.qty select { flex: 0 0 auto; width: auto; }
+/* Quantity (Beren 20/11/26): three boxes side by side, m², linear metres and boards, on a row of their own.
+   The one typed in is marked; the page fills the other two. */
+.est > .field, .qrow > .field { grid-column: 1 / -1; max-width: 600px; }
+.qty3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; align-items: end; }
+.qty3 input.src { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }   /* a heavier edge without changing the box's size */
 
 /* Quote list (Beren 20/11/26): the tick box in the result card adds the board shown to a list kept on the page,
    then clears itself and puts the choices back to the start for the next board. */
@@ -184,8 +184,13 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
     <div class="cover" id="stock"></div>
     <div class="cover" id="vatnote">VAT at 20% is added at invoice.</div>
     <div class="est">
-      <div class="field"><label for="f-area" id="qty-label">Area to clad</label>
-        <div class="qty"><input type="number" id="f-area" min="0" step="0.5" inputmode="decimal" placeholder="e.g. 40" aria-describedby="qty-hint"><select id="f-unit" aria-label="The quantity is in"></select></div>
+      <div class="field" role="group" aria-labelledby="qty-title">
+        <div class="eyebrow" id="qty-title">How much: type any one, the other two follow</div>
+        <div class="qty3">
+          <div class="field"><label for="f-area">Area (m²)</label><input type="number" id="f-area" min="0" step="any" inputmode="decimal" placeholder="e.g. 40" autocomplete="off" aria-describedby="qty-hint"></div>
+          <div class="field"><label for="f-lm">Linear metres</label><input type="number" id="f-lm" min="0" step="any" inputmode="decimal" placeholder="e.g. 275" autocomplete="off" aria-describedby="qty-hint"></div>
+          <div class="field"><label for="f-boards" id="f-boards-label">Boards</label><input type="number" id="f-boards" min="0" step="1" inputmode="numeric" placeholder="e.g. 60" autocomplete="off" aria-describedby="qty-hint"></div>
+        </div>
         <span class="hint" id="qty-hint" role="status" hidden></span></div>
       <div class="out"><div class="v" id="e-lm">–</div><div class="k" id="e-k">linear metres needed</div></div>
       <div class="out"><div class="v" id="e-cost">–</div><div class="k">cladding boards</div></div>
@@ -532,12 +537,41 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   // length the line is planned on (lineLength: the stock length chosen, the stock length that covers the ideal
   // length, or the ideal length itself), so it has no price until a board length is given. it.area holds the
   // figure whatever it is in (the name is from when it could only be an area: lists saved on a device keep it).
-  var UNITS = [["m2", "m²"], ["lm", "linear metres"], ["n", "boards"]];
-  var UNIT_LABEL = { m2: "Area to clad", lm: "Linear metres", n: "Number of boards" };
-  function fillUnit(s, unit) {
-    s.innerHTML = "";
-    UNITS.forEach(function (u) { var o = document.createElement("option"); o.value = u[0]; o.textContent = u[1]; s.appendChild(o); });
-    s.value = unit;
+  // Three boxes for the one quantity (Beren 20/11/26: "three boxes where you can enter one of the three values
+  // and the other two boxes change based on what you've entered"). The box typed in IS the quantity (it.unit,
+  // it.area) and is never rewritten; the page fills the other two from it and never reads them back, so nothing
+  // is rounded twice. Boards in a filled box are whole boards of the length the line would be priced at
+  // (lineLength), and the box stays empty where there is no such length.
+  // [unit, label, step, example, id on the result card]
+  // step "any" on the m² and linear-metre boxes: the page fills them to 2 decimal places, which a 0.5 step would mark invalid.
+  var QBOXES = [["m2", "Area (m²)", "any", "e.g. 40", "f-area"], ["lm", "Linear metres", "any", "e.g. 275", "f-lm"], ["n", "Boards", "1", "e.g. 60", "f-boards"]];
+  var qUnit = "m2";   // the box last typed in on the result card
+  function cardBoxes() { var b = {}; QBOXES.forEach(function (q) { b[q[0]] = $(q[4]); }); b.nLabel = $("f-boards-label"); return b; }
+  function boxText(x) { return String(Number(x.toFixed(2))); }
+  // boxes.nLabel is the label of the Boards box and boxes.what the board's name on a list row: the label says which
+  // board length the boards are counted at ("Boards (4.8 m)") whenever the page knows it.
+  function fillBoxes(boxes, it, f) {
+    var lm = f ? itemLm(it, f.cov) : 0, at = f ? lineLength(it) : 0, len = lm > 0 ? at : 0;
+    var shown = { m2: lm > 0 ? boxText(lm * f.cov / 1000) : "", lm: lm > 0 ? boxText(lm) : "", n: len ? String(Math.ceil(lm / len - 1e-9)) : "" };
+    QBOXES.forEach(function (q) {
+      var u = q[0], typed = u === it.unit;
+      if (!typed) boxes[u].value = shown[u];
+      boxes[u].classList[typed && it.area > 0 ? "add" : "remove"]("src");
+    });
+    var name = "Boards" + (at ? " (" + lengthText(at) + ")" : "");
+    if (boxes.nLabel) boxes.nLabel.textContent = name;
+    if (boxes.what) boxes.n.setAttribute("aria-label", name + " for " + boxes.what);
+  }
+  // The line under the three boxes when the page cannot say which board length a quantity is in: a number of boards
+  // typed then has no price, and a quantity typed as m² or linear metres leaves the Boards box empty.
+  function boardsNote(it, f, onRow) {
+    if (!f || !(it.area > 0) || lineLength(it)) return "";
+    var typed = it.unit === "n";
+    if (it.ideal) return "We sell full lengths and cannot say here which length we would send in this size, so " +
+      (typed ? "a number of boards is priced with your quote. Type the m² or the linear metres to see a price here." : "the boards are counted with your quote.");
+    if (typed) return onRow ? "No board length was given for this board, so a number of boards has no price here. Type the m² or the linear metres instead, or add the board again with its ideal length." :
+      "Type the ideal board length above to price a number of boards.";
+    return onRow ? "No board length was given for this board, so the number of boards is not shown." : "Type the ideal board length above to see the number of boards.";
   }
   function readUnit(v) { return v === "lm" || v === "n" ? v : "m2"; }
   function readQty(raw, unit) {
@@ -557,11 +591,10 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   // when the quantity was not an area, and whether a board length is still needed.
   function qtyShown(it, f) {
     var lm = f ? itemLm(it, f.cov) : 0;
-    if (!(lm > 0)) return { lm: 0, text: "–", k: "linear metres needed", needsLength: !!f && boardsUnpriced(it),
-      given: !!(it.ideal || it.len) };   // given: a length was typed, but the stock figures do not back a price on it
+    if (!(lm > 0)) return { lm: 0, text: "–", k: "linear metres needed" };
     var text = lm.toFixed(1) + " lm";
     if (it.unit === "n") text = num(it.area) + " × " + lengthText(lineLength(it)) + " = " + text;
-    return { lm: lm, text: text, needsLength: false, given: true,
+    return { lm: lm, text: text,
       k: it.unit === "m2" ? "linear metres needed" : "linear metres, covering " + (lm * f.cov / 1000).toFixed(1) + " m²" };
   }
   // The quantity line of the email; cov is the line's coverage when it is on the price list, else 0.
@@ -851,14 +884,12 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   $("copy-addr").addEventListener("click", function () { copyText(EMAIL, "Address copied: " + EMAIL); });
 
   function renderEstimate() {
-    var row = priceRow(), it = row ? currentItem() : null, unit = readUnit($("f-unit").value);
-    var q = it ? qtyShown(it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) }) : { lm: 0, text: "–", k: "linear metres needed", needsLength: false };
-    $("qty-label").textContent = UNIT_LABEL[unit];
-    $("f-area").step = unit === "n" ? "1" : "0.5";
+    var row = priceRow(), it = row ? currentItem() : null, unit = qUnit;
+    var q = it ? qtyShown(it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) }) : { lm: 0, text: "–", k: "linear metres needed" };
+    if (it) fillBoxes(cardBoxes(), it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) });
     $("e-lm").textContent = q.text; $("e-k").textContent = q.k;
-    $("qty-hint").hidden = !q.needsLength;
-    $("qty-hint").textContent = !q.needsLength ? "" : !q.given ? "Type the ideal board length above to price a number of boards." :
-      "We sell full lengths and cannot say here which length we would send in this size, so a number of boards is priced with your quote. Choose m² or linear metres to see a price here.";
+    var note = it ? boardsNote(it, { cov: coverage(I.profiles[sel[1]], I.sizes[sel[2]]) }, false) : "";
+    $("qty-hint").hidden = !note; $("qty-hint").textContent = note;
     if (!(q.lm > 0)) { $("e-cost").textContent = "–"; return; }
     var len = chosenLength();
     if (len && unit !== "n") {
@@ -878,8 +909,9 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
       render();
     });
   });
-  $("f-area").addEventListener("input", function () { touched(); renderEstimate(); renderMessage(); });
-  $("f-unit").addEventListener("change", function () { touched(); renderEstimate(); renderMessage(); });
+  QBOXES.forEach(function (q) {
+    $(q[4]).addEventListener("input", function () { touched(); qUnit = q[0]; renderEstimate(); renderMessage(); });
+  });
   $("f-ideal").addEventListener("input", function () { touched(); renderIdeal(); renderEstimate(); renderMessage(); });
   ["x-screws", "x-strip", "x-counter"].forEach(function (id) {
     $(id).addEventListener("change", function () { touched(); renderMessage(); });
@@ -901,7 +933,7 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   function resetChoices() {
     sel = [0, 0, 0, 0, 0, 0];
     START.forEach(function (v, i) { var k = LISTS[i].indexOf(v); if (k >= 0) sel[i] = k; });
-    adjustVal = {}; selLen = ""; $("f-area").value = ""; $("f-unit").value = "m2"; $("f-ideal").value = "";
+    adjustVal = {}; selLen = ""; qUnit = "m2"; QBOXES.forEach(function (q) { $(q[4]).value = ""; }); $("f-ideal").value = "";
     ["x-screws", "x-strip", "x-counter"].forEach(function (id) { $(id).checked = true; });
     moved(null);
     refill(0); render();
@@ -943,8 +975,8 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   }
   function itemKey(it) { return NAMES.map(function (k) { return it[k]; }).concat([it.mm === null ? "" : it.mm, it.len, it.ideal || "", (it.sc ? "s" : "") + (it.vs ? "v" : "") + (it.cb ? "c" : "")]).join("|"); }
   function currentItem() {
-    var pr = I.profiles[sel[1]], area = parseFloat($("f-area").value);
-    return cleanItem({ unit: readUnit($("f-unit").value), sp: I.species[sel[0]], pr: pr, sz: I.sizes[sel[2]], tx: I.textures[sel[3]], fi: I.fires[sel[4]],
+    var pr = I.profiles[sel[1]], area = parseFloat(cardBoxes()[qUnit].value);
+    return cleanItem({ unit: qUnit, sp: I.species[sel[0]], pr: pr, sz: I.sizes[sel[2]], tx: I.textures[sel[3]], fi: I.fires[sel[4]],
       co: I.coatings[sel[5]], mm: COV[pr].adjust ? adjustMm(pr) : null, len: selLen, ideal: readLength($("f-ideal").value), area: area > 0 ? area : 0,
       sc: $("x-screws").checked, vs: $("x-strip").checked, cb: $("x-counter").checked });
   }
@@ -998,16 +1030,22 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
       what.appendChild(el("small", "", d.tail + (it.len ? " · " + parseFloat(it.len).toFixed(1) + " m lengths" : "") +
         (it.ideal ? " · ideal board length " + lengthText(it.ideal) + heldWords(it.sp, it.sz, it.ideal) : "")));
       var per = el("div", "per"), extra = el("div", "extra", extrasSentence(it)), row = el("div", "qrow");
-      var field = el("div", "field"), lab = el("label", "", UNIT_LABEL[it.unit]), inp = document.createElement("input");
-      var both = el("div", "qty"), usel = document.createElement("select"), hint = el("span", "hint");
-      inp.id = "q-area-" + n; lab.htmlFor = inp.id;
-      inp.type = "number"; inp.min = "0"; inp.inputMode = "decimal"; inp.placeholder = "e.g. 40";
-      inp.setAttribute("aria-label", "Quantity for " + d.what);
-      usel.setAttribute("aria-label", "The quantity for " + d.what + " is in");
-      fillUnit(usel, it.unit);
-      if (it.area > 0) inp.value = it.area;
-      both.appendChild(inp); both.appendChild(usel);
-      field.appendChild(lab); field.appendChild(both); field.appendChild(hint);
+      var field = el("div", "field"), grid = el("div", "qty3"), hint = el("span", "hint"), boxes = {};
+      QBOXES.forEach(function (q) {
+        var cell = el("div", "field"), lab = el("label", "", q[1]), inp = document.createElement("input");
+        inp.id = "q-" + q[0] + "-" + n; lab.htmlFor = inp.id;
+        inp.type = "number"; inp.min = "0"; inp.step = q[2]; inp.inputMode = q[0] === "n" ? "numeric" : "decimal"; inp.placeholder = q[3];
+        inp.setAttribute("aria-label", q[1] + " for " + d.what); inp.autocomplete = "off";
+        inp.addEventListener("input", function () {
+          it.unit = q[0]; it.area = readQty(inp.value, it.unit);
+          paint(); renderTotal(); listChanged();
+        });
+        cell.appendChild(lab); cell.appendChild(inp); grid.appendChild(cell); boxes[q[0]] = inp;
+        if (q[0] === "n") boxes.nLabel = lab;
+      });
+      boxes.what = d.what;
+      if (it.area > 0) boxes[it.unit].value = it.area;
+      field.appendChild(grid); field.appendChild(hint);
       function out(k) { var o = el("div", "out"), v = el("div", "v", "–"), kk = el("div", "k", k); o.appendChild(v); o.appendChild(kk); row.appendChild(o); v.k = kk; return v; }
       row.appendChild(field);
       var lmOut = out("linear metres needed"), costOut = out("cladding boards");
@@ -1017,25 +1055,18 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
       function paint() {
         if (!f) {
           per.textContent = "This board is no longer on the price list, so it has no price here. Ask us about it.";
-          inp.disabled = true; return;
+          QBOXES.forEach(function (q) { boxes[q[0]].disabled = true; }); return;
         }
         per.innerHTML = "<b>" + money(f.priceLm) + "</b> per linear metre · <b>" + money(perM2(f.priceLm, f.cov)) +
           "</b> per square metre · covers " + f.cov + " mm per board (" + f.note + ")";
         var q = qtyShown(it, f);
-        lab.textContent = UNIT_LABEL[it.unit]; inp.step = it.unit === "n" ? "1" : "0.5";
+        fillBoxes(boxes, it, f);
         lmOut.textContent = q.text; lmOut.k.textContent = q.k;
-        hint.hidden = !q.needsLength;
-        hint.textContent = !q.needsLength ? "" : !q.given ? "No board length was given for this board, so a number of boards has no price here. Choose m² or linear metres, or add the board again with its ideal length." :
-          "We sell full lengths and cannot say here which length we would send in this size, so a number of boards is priced with your quote. Choose m² or linear metres to see a price here.";
+        var note = boardsNote(it, f, true);
+        hint.hidden = !note; hint.textContent = note;
         if (!(q.lm > 0)) { costOut.textContent = "–"; return; }
         costOut.innerHTML = penceText(lineFromLm(f.priceLm, q.lm, incVat ? VAT : 0).pence) + vatTag();
       }
-      function typed() {
-        it.unit = readUnit(usel.value); it.area = readQty(inp.value, it.unit);
-        paint(); renderTotal(); listChanged();
-      }
-      inp.addEventListener("input", typed);
-      usel.addEventListener("change", typed);
       rm.addEventListener("click", function (e) {
         // The second click of a double click lands on the row that moved up: it must not take that row too.
         // Browsers report it as click number 2, or (a fast double tap) as a new click within half a second.
@@ -1103,7 +1134,6 @@ footer { font-size: .82rem; color: var(--muted); border-top: 1px solid var(--lin
   });
 
   $("f-add").checked = false; $("f-collect").checked = false; $("o-hand").checked = false; $("o-fork").checked = false;
-  fillUnit($("f-unit"), "m2");
   quote = loadQuote();
   resetChoices(); renderList();
 
